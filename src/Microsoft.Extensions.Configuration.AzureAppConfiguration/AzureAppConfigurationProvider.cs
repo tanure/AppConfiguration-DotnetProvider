@@ -28,7 +28,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
         private readonly HostType _hostType;
         private readonly ConfigurationClient _client;
         private AzureAppConfigurationOptions _options;
-        private Dictionary<string, ConfigurationSetting> _applicationSettings;
+        private Dictionary<string, KeyValueData> _applicationSettings = new Dictionary<string, KeyValueData>(StringComparer.OrdinalIgnoreCase);
         private Dictionary<KeyValueIdentifier, ConfigurationSetting> _watchedSettings = new Dictionary<KeyValueIdentifier, ConfigurationSetting>();
 
         private readonly TimeSpan MinCacheExpirationInterval;
@@ -337,7 +337,12 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                 if (data.TryGetValue(watchedKey, out ConfigurationSetting loadedKv)
                     && watchedKeyLabel.Equals(new KeyValueIdentifier(loadedKv.Key, loadedKv.Label)))
                 {
-                    _watchedSettings[watchedKeyLabel] = loadedKv;
+                    // _watchedSettings[watchedKeyLabel] = loadedKv;
+                    _watchedSettings[watchedKeyLabel] = ConfigurationModelFactory.ConfigurationSetting(
+                                                        key: loadedKv.Key,
+                                                        label: loadedKv.Label,
+                                                        eTag: loadedKv.ETag,
+                                                        value: null);
                     continue;
                 }
 
@@ -356,7 +361,11 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                 if (watchedKv != null)
                 {
                     data[watchedKey] = watchedKv;
-                    _watchedSettings[watchedKeyLabel] = watchedKv;
+                    _watchedSettings[watchedKeyLabel] = ConfigurationModelFactory.ConfigurationSetting(
+                                                        key: watchedKv.Key,
+                                                        label: watchedKv.Label,
+                                                        eTag: watchedKv.ETag,
+                                                        value: null);
                 }
             }
         }
@@ -436,17 +445,18 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
 
                         hasChanged = true;
 
-                            // Add the key-value if it is not loaded, or update it if it was loaded with a different label
-                            _applicationSettings[watchedKey] = watchedKv;
-                            _watchedSettings[watchedKeyLabel] = watchedKv;
+                        // Add the key-value if it is not loaded, or update it if it was loaded with a different label
+                        KeyValueData kvData = new KeyValueData(watchedKv);
+                        _applicationSettings[watchedKey] = kvData;
+                        _watchedSettings[watchedKeyLabel] = watchedKv;
 
-                            // Invalidate the cached Key Vault secret (if any) for this ConfigurationSetting
-                            foreach (IKeyValueAdapter adapter in _options.Adapters)
-                            {
-                                adapter.InvalidateCache(watchedKv);
-                            }
+                        // Invalidate the cached Key Vault secret (if any) for this ConfigurationSetting
+                        foreach (IKeyValueAdapter adapter in _options.Adapters)
+                        {
+                            adapter.InvalidateCache(watchedKv);
                         }
                     }
+                }
 
                 if (hasChanged)
                 {
@@ -479,7 +489,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                     continue;
                 }
 
-                IEnumerable<ConfigurationSetting> currentKeyValues;
+                IEnumerable<KeyValueData> currentKeyValues;
 
                 if (changeWatcher.Key.EndsWith("*"))
                 {
@@ -520,8 +530,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
         private async Task SetData(IDictionary<string, ConfigurationSetting> data, bool ignoreFailures = false, CancellationToken cancellationToken = default)
         {
             // Update cache of settings
-            this._applicationSettings = data as Dictionary<string, ConfigurationSetting> ??
-                new Dictionary<string, ConfigurationSetting>(data, StringComparer.OrdinalIgnoreCase);
+            _applicationSettings = data.ToDictionary(kv => kv.Key, kv => new KeyValueData(kv.Value));
 
             // Set the application data for the configuration provider
             var applicationData = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -600,7 +609,7 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                 }
                 else if (change.ChangeType == KeyValueChangeType.Modified)
                 {
-                    _applicationSettings[change.Key] = change.Current;
+                    _applicationSettings[change.Key] = new KeyValueData(change.Current);
                 }
 
                 // Invalidate the cached Key Vault secret (if any) for this ConfigurationSetting
@@ -610,6 +619,8 @@ namespace Microsoft.Extensions.Configuration.AzureAppConfiguration
                 }
             }
         }
+
+
 
         private async Task CallWithRequestTracing(Func<Task> clientCall)
         {
